@@ -78,7 +78,7 @@ def translate_with_retry(text, retries=3):
             return MyMemoryTranslator(source='en-GB', target='uk-UA').translate(text)
         except Exception as e:
             wait = 5 * (attempt + 1)
-            print(f"Помилка при перекладі ({e.__class__.__name__}), чекаю {wait} с...")
+            print(f"Помилка перекладу ({e.__class__.__name__}), чекаю {wait} с...")
             time.sleep(wait)
     return None
 

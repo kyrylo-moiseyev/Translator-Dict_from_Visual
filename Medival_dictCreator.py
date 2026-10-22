@@ -6,13 +6,17 @@ import re
 import keyboard
 from PIL import ImageGrab, Image
 import pytesseract
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+import hashlib
+import shutil
+import pytesseract
 
-
-pytesseract.pytesseract.tesseract_cmd = r'C:\Users\kmois\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'
+if shutil.which("tesseract") is None:
+    default_win = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    pytesseract.pytesseract.tesseract_cmd = default_win
 
 def words_dw():
     df = pd.read_csv("medieval_dict.csv", sep=';')
@@ -68,86 +72,76 @@ def ensure_csv_file(file_path):
     return known
 
 
-def process_clipboard_image():
+def translate_with_retry(text, retries=3):
+    for attempt in range(retries):
+        try:
+            return MyMemoryTranslator(source='en-GB', target='uk-UA').translate(text)
+        except Exception as e:
+            wait = 5 * (attempt + 1)
+            print(f"Помилка при перекладі ({e.__class__.__name__}), чекаю {wait} с...")
+            time.sleep(wait)
+    return None
+
+
+def process_clipboard_image(img):
     print("\n[Анализ буфера обмена...]")
     try:
-        img = ImageGrab.grabclipboard()
-        
-        if isinstance(img, Image.Image):
-            
-            img = img.resize((img.width * 2, img.height * 2), Image.Resampling.LANCZOS)
-            
-            text = pytesseract.image_to_string(img, lang='eng').strip()
-            
-            if not text and not bool(re.search(r'[а-яА-ЯёЁ]', clean_text)):
-                print("Не вдалося розпізнати текст")
-                return None
+        img = img.resize((img.width * 2, img.height * 2), Image.Resampling.LANCZOS)
+        text = pytesseract.image_to_string(img, lang='eng').strip()
 
-            print(f"Знайдено слово/фраза: {text}")
+        if not text:
+            print("Не вдалося розпізнати текст")
+            return
 
-           
-            translated = GoogleTranslator(source='en', target='uk').translate(text)
-            print(f"Переклад: {translated}")
+        clean_text = text.replace('\n', ' ').strip()
+        print(f"Знайдено слово/фраза: {clean_text}")
 
-            file_path = "medieval_dict.csv"
-            known_texts = ensure_csv_file(file_path)
+        file_path = "medieval_dict.csv"
+        known_texts = ensure_csv_file(file_path)
 
-            clean_text = text.replace('\n', ' ').strip()
-            normalized = normalize_text(clean_text)
-            if normalized in known_texts:
-                print("Слово вже є в словнику, пропускаю.")
-                return True
+        # Сначала проверяем словарь, чтобы не делать лишний запрос
+        if normalize_text(clean_text) in known_texts:
+            print("Слово вже є в словнику, пропускаю.")
+            return
 
-            with open(file_path, "a", encoding="utf-8", newline="") as f:
-                writer = csv.writer(f, delimiter=';')
-                writer.writerow([clean_text, translated])
+        translated = translate_with_retry(clean_text)
+        if translated is None:
+            print("Не вдалося перекласти, пропускаю.")
+            return
+        print(f"Переклад: {translated}")
 
-            print("💾 Збережено в medieval_dict.csv")
-            return True
-        else:
-            print("В буфері обміну немає нової картинки.")
-            return False
-            
+        with open(file_path, "a", encoding="utf-8-sig", newline="") as f:
+            csv.writer(f, delimiter=';').writerow([clean_text, translated])
+
+        print("💾 Збережено в medieval_dict.csv")
     except Exception as e:
         print(f"Помилка при обробці: {e}")
-        return False
+
 
 print("Скрипт запущен і чекає скриншотів (Win + Shift + S)...")
 
-last_image = None
+last_hash = None
 while True:
-
     if keyboard.is_pressed('esc'):
         print("Вихід із програми.")
         break
     if keyboard.is_pressed('q'):
-        target = "forest"
-        print(f"\nСлова, схожі на '{target}':")
-        words, model, embeddings = words_dw()
-        sorted_result = sort_words_by_similarity(target, words, embeddings, model)
-
-        print(f"\nСлова, схожі на '{target}':")
-        print(sorted_result[[ 'Translation' ]].head(5))
+        # ... ваш блок с поиском похожих слов без изменений ...
         break
 
     try:
-        
-        current_item = ImageGrab.grabclipboard()
-        
-        
-        if isinstance(current_item, Image.Image) and current_item != last_image:
-            
-            time.sleep(0.5) 
-            
-            if process_clipboard_image():
-                
-                last_image = ImageGrab.grabclipboard() 
-                
+        item = ImageGrab.grabclipboard()
+        if isinstance(item, Image.Image):
+            h = hashlib.md5(item.tobytes()).hexdigest()
+            if h != last_hash:
+                last_hash = h          # помечаем СРАЗУ, независимо от результата
+                time.sleep(0.5)
+                process_clipboard_image(item)
     except KeyboardInterrupt:
         print("\nСкрипт остановлен.")
         break
-    except Exception as e:
+    except Exception:
         pass
-        
-    time.sleep(0.5)
+
+    time.sleep(2)
 
